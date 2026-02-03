@@ -106,30 +106,73 @@ app.get('/api/tasks', (req, res) => {
   res.json(readTasks());
 });
 
+app.get('/api/tasks/:id', (req, res) => {
+  const data = readTasks();
+  const t = data.tasks.find((x) => x.id === req.params.id);
+  if (!t) return res.status(404).json({ ok: false, error: 'Not found' });
+  res.json({ ok: true, task: t });
+});
+
 app.post('/api/tasks', (req, res) => {
-  const { id, title, status, detail } = req.body || {};
+  const {
+    id,
+    title,
+    status,
+    parentId,
+    detail,
+    notes,
+    artifacts,
+    howToTest,
+    humanNeeded,
+    humanNeededReason,
+  } = req.body || {};
+
   if (!title || typeof title !== 'string') {
     return res.status(400).json({ ok: false, error: 'Missing title' });
   }
+
   const now = new Date().toISOString();
   const data = readTasks();
   const tasks = data.tasks;
   const taskId = (id && String(id)) || `t_${Math.random().toString(16).slice(2)}_${Date.now()}`;
   const idx = tasks.findIndex((t) => t.id === taskId);
+  const prev = idx === -1 ? null : tasks[idx];
+
   const next = {
     id: taskId,
     title,
-    status: status || (idx === -1 ? 'not_started' : tasks[idx].status),
-    detail: detail || (idx === -1 ? '' : tasks[idx].detail),
+    status: status || (idx === -1 ? 'not_started' : prev.status),
+    parentId: parentId ?? (idx === -1 ? null : prev.parentId ?? null),
+
+    // Freeform fields
+    detail: detail ?? (idx === -1 ? '' : prev.detail ?? ''),
+    notes: Array.isArray(notes) ? notes : (idx === -1 ? [] : prev.notes ?? []),
+    artifacts: Array.isArray(artifacts) ? artifacts : (idx === -1 ? [] : prev.artifacts ?? []),
+    howToTest: howToTest ?? (idx === -1 ? '' : prev.howToTest ?? ''),
+
+    // Human-in-the-loop ONLY when needed
+    humanNeeded: typeof humanNeeded === 'boolean' ? humanNeeded : (idx === -1 ? false : !!prev.humanNeeded),
+    humanNeededReason: humanNeededReason ?? (idx === -1 ? '' : prev.humanNeededReason ?? ''),
+
     updatedAt: now,
-    createdAt: idx === -1 ? now : tasks[idx].createdAt,
+    createdAt: idx === -1 ? now : prev.createdAt,
   };
+
   if (idx === -1) tasks.unshift(next);
   else tasks[idx] = next;
 
   writeTasks({ tasks });
-  appendEvent({ type: 'task.upsert', task: next });
-  res.json({ ok: true, task: next });
+
+  const evt = appendEvent({ type: 'task.upsert', task: next });
+  if (!prev) appendEvent({ type: 'task.created', taskId, title: next.title });
+  if (prev && prev.status !== next.status) {
+    appendEvent({ type: 'task.status_changed', taskId, from: prev.status, to: next.status });
+  }
+  if (prev && !!prev.humanNeeded !== !!next.humanNeeded) {
+    appendEvent({ type: 'task.human_needed_changed', taskId, from: !!prev.humanNeeded, to: !!next.humanNeeded });
+  }
+
+  res.json({ ok: true, task: next, event: evt });
 });
 
 app.get('/api/logs', (req, res) => {
