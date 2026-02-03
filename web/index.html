@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Command Center</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 0; background:#0b1020; color:#e7eaff; }
+      header { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08); display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+      header h1 { font-size: 16px; margin:0; }
+      header .pill { font-size:12px; padding:4px 8px; border:1px solid rgba(255,255,255,.15); border-radius:999px; opacity:.9; }
+      main { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+      .panel { background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius: 10px; overflow:hidden; }
+      .panel h2 { margin:0; padding:10px 12px; font-size:13px; border-bottom:1px solid rgba(255,255,255,.08); opacity:.95; display:flex; justify-content:space-between; align-items:center; }
+      .cols { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 10px; }
+      .col { background: rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); border-radius: 10px; padding:10px; min-height: 220px; }
+      .col h3 { margin:0 0 8px; font-size:12px; opacity:.85; }
+      .task { padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.08); background:rgba(0,0,0,.25); margin-bottom:8px; }
+      .task .t { font-size: 13px; }
+      .task .d { font-size: 12px; opacity:.8; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .row { display:flex; gap:8px; padding:10px 12px; border-top:1px solid rgba(255,255,255,.08); }
+      input, select { background:#0f1730; border:1px solid rgba(255,255,255,.12); color:#e7eaff; border-radius:10px; padding:8px 10px; font-size: 12px; }
+      button { background:#4f7cff; border:0; color:white; padding:8px 12px; border-radius:10px; font-weight:600; cursor:pointer; font-size:12px; }
+      pre { margin:0; padding: 10px 12px; font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; max-height: 380px; overflow:auto; }
+      .muted { opacity: .75; }
+      .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .event { font-size:12px; border-bottom:1px solid rgba(255,255,255,.06); padding:8px 12px; }
+      .event .ts { opacity:.75; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .event .ty { font-weight:700; margin-left:6px; }
+      .event .de { opacity:.85; margin-top:4px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Command Center</h1>
+      <span class="pill" id="health">checking…</span>
+      <span class="pill" id="logpath"></span>
+      <span class="pill muted">Tasks + Activity + Logs</span>
+    </header>
+
+    <main>
+      <section class="panel" style="grid-column:1 / span 2;">
+        <h2>Tasks <span class="muted" id="taskcount"></span></h2>
+        <div class="cols">
+          <div class="col"><h3>Not started</h3><div id="tasks_not_started"></div></div>
+          <div class="col"><h3>In progress</h3><div id="tasks_in_progress"></div></div>
+          <div class="col"><h3>Done</h3><div id="tasks_done"></div></div>
+        </div>
+        <div class="row">
+          <input id="title" placeholder="New task title" style="flex:1" />
+          <select id="status">
+            <option value="not_started">Not started</option>
+            <option value="in_progress">In progress</option>
+            <option value="done">Done</option>
+          </select>
+          <input id="detail" placeholder="Detail (optional)" style="flex:1" />
+          <button id="add">Add task</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Activity (from OpenClaw log)</h2>
+        <pre id="activity">Loading…</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Events (this dashboard)</h2>
+        <div id="events" style="max-height:380px; overflow:auto;"></div>
+      </section>
+
+      <section class="panel" style="grid-column:1 / span 2;">
+        <h2>Logs (tail)</h2>
+        <pre id="logs">Loading…</pre>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function taskEl(t) {
+        const div = document.createElement('div');
+        div.className = 'task';
+        div.innerHTML = `<div class="t">${escapeHtml(t.title)}</div>` + (t.detail ? `<div class="d">${escapeHtml(t.detail)}</div>` : '');
+        return div;
+      }
+
+      function eventEl(e) {
+        const div = document.createElement('div');
+        div.className = 'event';
+        const detail = e.detail ? escapeHtml(JSON.stringify(e.detail)).slice(0, 400) : '';
+        div.innerHTML = `<div><span class="ts">${escapeHtml(e.ts)}</span><span class="ty">${escapeHtml(e.type)}</span></div>` + (detail ? `<div class="de">${detail}</div>` : '');
+        return div;
+      }
+
+      function escapeHtml(s){
+        return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      }
+
+      async function refresh() {
+        try {
+          const h = await fetch('/api/health').then(r => r.json());
+          $('health').textContent = h.ok ? `ok · ${new Date(h.ts).toLocaleTimeString()}` : 'not ok';
+        } catch { $('health').textContent = 'health error'; }
+
+        try {
+          const t = await fetch('/api/tasks').then(r => r.json());
+          const tasks = (t.tasks || []);
+          $('taskcount').textContent = `${tasks.length} total`;
+          const buckets = {
+            not_started: tasks.filter(x => x.status === 'not_started'),
+            in_progress: tasks.filter(x => x.status === 'in_progress'),
+            done: tasks.filter(x => x.status === 'done')
+          };
+          for (const k of Object.keys(buckets)) {
+            const root = $('tasks_' + k);
+            root.innerHTML = '';
+            buckets[k].forEach(task => root.appendChild(taskEl(task)));
+          }
+        } catch {}
+
+        try {
+          const a = await fetch('/api/activity').then(r => r.json());
+          $('logpath').textContent = a.ok ? a.path : '';
+          $('activity').textContent = a.ok ? a.items.join('\n') : (a.error || 'no activity');
+        } catch {
+          $('activity').textContent = 'activity fetch error';
+        }
+
+        try {
+          const l = await fetch('/api/logs?lines=250').then(r => r.json());
+          $('logs').textContent = l.ok ? l.lines : (l.error || 'no logs');
+        } catch {
+          $('logs').textContent = 'log fetch error';
+        }
+
+        try {
+          const ev = await fetch('/api/events?limit=200').then(r => r.json());
+          const root = $('events');
+          root.innerHTML = '';
+          (ev.events || []).slice().reverse().forEach(e => root.appendChild(eventEl(e)));
+        } catch {}
+      }
+
+      $('add').addEventListener('click', async () => {
+        const title = $('title').value.trim();
+        const status = $('status').value;
+        const detail = $('detail').value.trim();
+        if (!title) return;
+        await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, status, detail })
+        });
+        $('title').value = '';
+        $('detail').value = '';
+        refresh();
+      });
+
+      refresh();
+      setInterval(refresh, 2000);
+    </script>
+  </body>
+</html>
