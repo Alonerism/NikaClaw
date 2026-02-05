@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Command Center</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 0; background:#0b1020; color:#e7eaff; }
+      header { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08); display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+      header h1 { font-size: 16px; margin:0; }
+      header .pill { font-size:12px; padding:4px 8px; border:1px solid rgba(255,255,255,.15); border-radius:999px; opacity:.9; }
+      main { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+      .panel { background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius: 10px; overflow:hidden; }
+      .panel h2 { margin:0; padding:10px 12px; font-size:13px; border-bottom:1px solid rgba(255,255,255,.08); opacity:.95; display:flex; justify-content:space-between; align-items:center; }
+      .cols { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 10px; }
+      .col { background: rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); border-radius: 10px; padding:10px; min-height: 220px; }
+      .col h3 { margin:0 0 8px; font-size:12px; opacity:.85; }
+      .task { padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.08); background:rgba(0,0,0,.25); margin-bottom:8px; cursor:pointer; }
+      .task:hover { border-color: rgba(79,124,255,.5); }
+      .task .t { font-size: 13px; display:flex; align-items:center; gap:8px; }
+      .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.15); opacity:.95; }
+      .badge.human { border-color: rgba(255,164,0,.55); color: #ffd08a; }
+      .badge.sub { opacity:.7; }
+      .task .d { font-size: 12px; opacity:.8; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .indent { margin-left: 14px; border-left: 1px dashed rgba(255,255,255,.12); padding-left: 10px; }
+      .row { display:flex; gap:8px; padding:10px 12px; border-top:1px solid rgba(255,255,255,.08); }
+      input, select { background:#0f1730; border:1px solid rgba(255,255,255,.12); color:#e7eaff; border-radius:10px; padding:8px 10px; font-size: 12px; }
+      button { background:#4f7cff; border:0; color:white; padding:8px 12px; border-radius:10px; font-weight:600; cursor:pointer; font-size:12px; }
+      pre { margin:0; padding: 10px 12px; font-size: 12px; line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; max-height: 380px; overflow:auto; }
+      .muted { opacity: .75; }
+      .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .event { font-size:12px; border-bottom:1px solid rgba(255,255,255,.06); padding:8px 12px; }
+      .event .ts { opacity:.75; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .event .ty { font-weight:700; margin-left:6px; }
+      .event .de { opacity:.85; margin-top:4px; }
+
+      /* Drawer */
+      .drawer { position:fixed; top:0; right:0; width: 420px; max-width: 92vw; height: 100vh; background:#0b1020; border-left:1px solid rgba(255,255,255,.10); box-shadow: -20px 0 60px rgba(0,0,0,.4); transform: translateX(110%); transition: transform .18s ease; z-index: 50; display:flex; flex-direction:column; }
+      .drawer.open { transform: translateX(0); }
+      .drawer header { border-bottom:1px solid rgba(255,255,255,.10); }
+      .drawer .content { padding: 12px; overflow:auto; }
+      .drawer textarea { width:100%; min-height: 80px; }
+      .drawer .kv { font-size:12px; opacity:.9; margin: 10px 0; }
+      .drawer .kv b { opacity:1; }
+      .drawer .actions { display:flex; gap:8px; flex-wrap:wrap; padding: 10px 12px; border-top:1px solid rgba(255,255,255,.10); }
+      .link { color:#9ab5ff; text-decoration:none; }
+      .hr { height:1px; background: rgba(255,255,255,.08); margin: 10px 0; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Command Center</h1>
+      <span class="pill" id="health">checking…</span>
+      <span class="pill" id="logpath"></span>
+      <span class="pill muted">Tasks + Activity + Logs</span>
+      <button id="setApi" style="background:rgba(255,255,255,.08);">Set backend</button>
+    </header>
+
+    <main>
+      <section class="panel" style="grid-column:1 / span 2;">
+        <h2>Tasks <span class="muted" id="taskcount"></span></h2>
+        <div class="cols">
+          <div class="col"><h3>Not started</h3><div id="tasks_not_started"></div></div>
+          <div class="col"><h3>In progress</h3><div id="tasks_in_progress"></div></div>
+          <div class="col"><h3>Done</h3><div id="tasks_done"></div></div>
+        </div>
+        <div class="row">
+          <input id="title" placeholder="New task title" style="flex:1" />
+          <select id="status">
+            <option value="not_started">Not started</option>
+            <option value="in_progress">In progress</option>
+            <option value="done">Done</option>
+          </select>
+          <input id="detail" placeholder="Detail (optional)" style="flex:1" />
+          <button id="add">Add task</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Activity (from OpenClaw log)</h2>
+        <pre id="activity">Loading…</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Events (this dashboard)</h2>
+        <div id="events" style="max-height:380px; overflow:auto;"></div>
+      </section>
+
+      <section class="panel" style="grid-column:1 / span 2;">
+        <h2>Logs (tail)</h2>
+        <pre id="logs">Loading…</pre>
+      </section>
+    </main>
+
+    <aside class="drawer" id="drawer">
+      <header>
+        <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+          <div>
+            <div style="font-size:12px; opacity:.8;">Task</div>
+            <div id="d_title" style="font-size:14px; font-weight:800; margin-top:2px;"></div>
+          </div>
+          <button id="d_close" style="background:rgba(255,255,255,.08);">Close</button>
+        </div>
+      </header>
+      <div class="content">
+        <div class="kv"><b>ID:</b> <span id="d_id" class="muted"></span></div>
+        <div class="kv"><b>Status:</b> <select id="d_status">
+          <option value="not_started">Not started</option>
+          <option value="in_progress">In progress</option>
+          <option value="done">Done</option>
+        </select></div>
+        <div class="kv"><label><input type="checkbox" id="d_humanNeeded" /> <b>Human needed</b></label></div>
+        <div class="kv"><input id="d_humanReason" placeholder="If human needed, why? (keys/DNS/OAuth/etc)" style="width:100%" /></div>
+
+        <div class="hr"></div>
+
+        <div style="font-size:12px; opacity:.85; margin-bottom:6px;">Detail</div>
+        <textarea id="d_detail" placeholder="What is this task? Definition of done?" ></textarea>
+
+        <div style="font-size:12px; opacity:.85; margin: 10px 0 6px;">How to test</div>
+        <textarea id="d_howToTest" placeholder="Step-by-step test plan" ></textarea>
+
+        <div style="font-size:12px; opacity:.85; margin: 10px 0 6px;">Artifacts (one per line)</div>
+        <textarea id="d_artifacts" placeholder="URLs, commit hashes, file paths, screenshots" ></textarea>
+
+        <div style="font-size:12px; opacity:.85; margin: 10px 0 6px;">Notes (append-only; newest last)</div>
+        <textarea id="d_noteNew" placeholder="Add a note…"></textarea>
+        <button id="d_addNote" style="margin-top:8px;">Add note</button>
+
+        <div class="hr"></div>
+
+        <div style="font-size:12px; opacity:.85; margin-bottom:6px;">Subtask</div>
+        <input id="d_subTitle" placeholder="Subtask title" style="width:100%" />
+        <button id="d_addSub" style="margin-top:8px;">Create subtask</button>
+      </div>
+      <div class="actions">
+        <button id="d_save">Save changes</button>
+        <button id="d_markProgress" style="background:#7c5cff;">Mark in progress</button>
+        <button id="d_markDone" style="background:#2fbf71;">Mark done</button>
+      </div>
+    </aside>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      let TASKS = [];
+      let TASK_BY_ID = new Map();
+      let OPEN_TASK_ID = null;
+
+      function taskEl(t, isSub=false) {
+        const div = document.createElement('div');
+        div.className = 'task';
+        div.dataset.taskId = t.id;
+        const badges = [isSub ? `<span class="badge sub">sub</span>` : '']
+          .concat(t.humanNeeded ? [`<span class="badge human">human</span>`] : [])
+          .filter(Boolean)
+          .join('');
+        div.innerHTML = `<div class="t">${escapeHtml(t.title)} ${badges}</div>` + (t.detail ? `<div class="d">${escapeHtml(t.detail)}</div>` : '');
+        div.addEventListener('click', () => openDrawer(t.id));
+        return div;
+      }
+
+      function buildTree(tasks) {
+        const byParent = new Map();
+        for (const t of tasks) {
+          const p = t.parentId || null;
+          if (!byParent.has(p)) byParent.set(p, []);
+          byParent.get(p).push(t);
+        }
+        for (const [k, arr] of byParent.entries()) {
+          arr.sort((a,b) => (b.updatedAt||'').localeCompare(a.updatedAt||''));
+        }
+        return { byParent };
+      }
+
+      function renderTaskColumn(rootEl, tasks, status) {
+        rootEl.innerHTML = '';
+        const { byParent } = buildTree(tasks.filter(t => t.status === status));
+        const roots = byParent.get(null) || [];
+
+        function renderNode(t, container, depth) {
+          container.appendChild(taskEl(t, depth > 0));
+          const kids = byParent.get(t.id) || [];
+          if (kids.length) {
+            const wrap = document.createElement('div');
+            wrap.className = 'indent';
+            kids.forEach(k => renderNode(k, wrap, depth + 1));
+            container.appendChild(wrap);
+          }
+        }
+
+        roots.forEach(t => renderNode(t, rootEl, 0));
+      }
+
+      function eventEl(e) {
+        const div = document.createElement('div');
+        div.className = 'event';
+        const detail = e.detail ? escapeHtml(JSON.stringify(e.detail)).slice(0, 400) : '';
+        div.innerHTML = `<div><span class="ts">${escapeHtml(e.ts)}</span><span class="ty">${escapeHtml(e.type)}</span></div>` + (detail ? `<div class="de">${detail}</div>` : '');
+        return div;
+      }
+
+      function escapeHtml(s){
+        return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      }
+
+      function getApiBase() {
+        return localStorage.getItem('NIKACLAW_API_BASE_URL') || '';
+      }
+      function apiUrl(path) {
+        const base = getApiBase();
+        if (!base) return path;
+        return base.replace(/\/$/, '') + path;
+      }
+
+      async function refresh() {
+        try {
+          const h = await fetch(apiUrl('/api/health')).then(r => r.json());
+          $('health').textContent = h.ok ? `ok · ${new Date(h.ts).toLocaleTimeString()}` : 'not ok';
+        } catch { $('health').textContent = 'health error'; }
+
+        try {
+          const t = await fetch(apiUrl('/api/tasks')).then(r => r.json());
+          TASKS = (t.tasks || []);
+          TASK_BY_ID = new Map(TASKS.map(x => [x.id, x]));
+          $('taskcount').textContent = `${TASKS.length} total`;
+
+          renderTaskColumn($('tasks_not_started'), TASKS, 'not_started');
+          renderTaskColumn($('tasks_in_progress'), TASKS, 'in_progress');
+          renderTaskColumn($('tasks_done'), TASKS, 'done');
+
+          if (OPEN_TASK_ID && TASK_BY_ID.has(OPEN_TASK_ID)) {
+            hydrateDrawer(TASK_BY_ID.get(OPEN_TASK_ID));
+          }
+        } catch {}
+
+        try {
+          const a = await fetch(apiUrl('/api/activity')).then(r => r.json());
+          $('logpath').textContent = a.ok ? a.path : '';
+          $('activity').textContent = a.ok ? a.items.join('\n') : (a.error || 'no activity');
+        } catch {
+          $('activity').textContent = 'activity fetch error';
+        }
+
+        try {
+          const l = await fetch(apiUrl('/api/logs?lines=250')).then(r => r.json());
+          $('logs').textContent = l.ok ? l.lines : (l.error || 'no logs');
+        } catch {
+          $('logs').textContent = 'log fetch error';
+        }
+
+        try {
+          const ev = await fetch(apiUrl('/api/events?limit=200')).then(r => r.json());
+          const root = $('events');
+          root.innerHTML = '';
+          (ev.events || []).slice().reverse().forEach(e => root.appendChild(eventEl(e)));
+        } catch {}
+      }
+
+      async function upsertTask(payload) {
+        const r = await fetch(apiUrl('/api/tasks'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        return r.json();
+      }
+
+      function openDrawer(taskId) {
+        const t = TASK_BY_ID.get(taskId);
+        if (!t) return;
+        OPEN_TASK_ID = taskId;
+        hydrateDrawer(t);
+        $('drawer').classList.add('open');
+      }
+
+      function closeDrawer() {
+        OPEN_TASK_ID = null;
+        $('drawer').classList.remove('open');
+      }
+
+      function hydrateDrawer(t) {
+        $('d_title').textContent = t.title;
+        $('d_id').textContent = t.id;
+        $('d_status').value = t.status || 'not_started';
+        $('d_detail').value = t.detail || '';
+        $('d_howToTest').value = t.howToTest || '';
+        $('d_humanNeeded').checked = !!t.humanNeeded;
+        $('d_humanReason').value = t.humanNeededReason || '';
+        $('d_artifacts').value = (t.artifacts || []).join('\n');
+      }
+
+      $('d_close').addEventListener('click', closeDrawer);
+
+      $('d_save').addEventListener('click', async () => {
+        const t = TASK_BY_ID.get(OPEN_TASK_ID);
+        if (!t) return;
+        const artifacts = $('d_artifacts').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+        await upsertTask({
+          id: t.id,
+          title: t.title,
+          status: $('d_status').value,
+          parentId: t.parentId || null,
+          detail: $('d_detail').value,
+          howToTest: $('d_howToTest').value,
+          artifacts,
+          humanNeeded: $('d_humanNeeded').checked,
+          humanNeededReason: $('d_humanReason').value,
+        });
+        refresh();
+      });
+
+      $('d_markProgress').addEventListener('click', async () => {
+        const t = TASK_BY_ID.get(OPEN_TASK_ID);
+        if (!t) return;
+        await upsertTask({ id: t.id, title: t.title, status: 'in_progress' });
+        refresh();
+      });
+
+      $('d_markDone').addEventListener('click', async () => {
+        const t = TASK_BY_ID.get(OPEN_TASK_ID);
+        if (!t) return;
+        await upsertTask({ id: t.id, title: t.title, status: 'done', humanNeeded: false, humanNeededReason: '' });
+        refresh();
+      });
+
+      $('d_addNote').addEventListener('click', async () => {
+        const t = TASK_BY_ID.get(OPEN_TASK_ID);
+        if (!t) return;
+        const note = $('d_noteNew').value.trim();
+        if (!note) return;
+        const nextNotes = Array.isArray(t.notes) ? t.notes.slice() : [];
+        nextNotes.push({ ts: new Date().toISOString(), text: note });
+        await upsertTask({ id: t.id, title: t.title, notes: nextNotes });
+        $('d_noteNew').value = '';
+        refresh();
+      });
+
+      $('d_addSub').addEventListener('click', async () => {
+        const t = TASK_BY_ID.get(OPEN_TASK_ID);
+        if (!t) return;
+        const st = $('d_subTitle').value.trim();
+        if (!st) return;
+        await upsertTask({ title: st, status: 'not_started', parentId: t.id });
+        $('d_subTitle').value = '';
+        refresh();
+      });
+
+      $('add').addEventListener('click', async () => {
+        const title = $('title').value.trim();
+        const status = $('status').value;
+        const detail = $('detail').value.trim();
+        if (!title) return;
+        await upsertTask({ title, status, detail });
+        $('title').value = '';
+        $('detail').value = '';
+        refresh();
+      });
+
+      $('setApi').addEventListener('click', () => {
+        const current = getApiBase();
+        const next = prompt('Backend URL (example: http://127.0.0.1:3999 or https://claw-api.yourdomain.com)', current || '');
+        if (next === null) return;
+        const v = String(next).trim();
+        if (!v) localStorage.removeItem('NIKACLAW_API_BASE_URL');
+        else localStorage.setItem('NIKACLAW_API_BASE_URL', v);
+        refresh();
+      });
+
+      refresh();
+      setInterval(refresh, 2000);
+    </script>
+  </body>
+</html>
