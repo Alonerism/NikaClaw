@@ -54,6 +54,7 @@
       <span class="pill" id="logpath"></span>
       <span class="pill muted">Tasks + Activity + Logs</span>
       <button id="setApi" style="background:rgba(255,255,255,.08);">Set backend</button>
+      <button id="setSb" style="background:rgba(255,255,255,.08);">Set Supabase</button>
     </header>
 
     <main>
@@ -140,6 +141,7 @@
       </div>
     </aside>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
       const $ = (id) => document.getElementById(id);
 
@@ -204,6 +206,7 @@
         return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
       }
 
+      // ---- Backend selection ----
       function getApiBase() {
         return localStorage.getItem('NIKACLAW_API_BASE_URL') || '';
       }
@@ -213,15 +216,59 @@
         return base.replace(/\/$/, '') + path;
       }
 
+      function getSupabaseUrl() {
+        return localStorage.getItem('NIKACLAW_SUPABASE_URL') || '';
+      }
+      function getSupabaseAnonKey() {
+        return localStorage.getItem('NIKACLAW_SUPABASE_ANON_KEY') || '';
+      }
+      function hasSupabase() {
+        return !!(getSupabaseUrl() && getSupabaseAnonKey() && window.supabase);
+      }
+      function getSupabaseClient() {
+        if (!hasSupabase()) return null;
+        // memoize
+        if (window.__nikaSupabase) return window.__nikaSupabase;
+        window.__nikaSupabase = window.supabase.createClient(getSupabaseUrl(), getSupabaseAnonKey());
+        return window.__nikaSupabase;
+      }
+
       async function refresh() {
+        // Health
         try {
-          const h = await fetch(apiUrl('/api/health')).then(r => r.json());
-          $('health').textContent = h.ok ? `ok · ${new Date(h.ts).toLocaleTimeString()}` : 'not ok';
+          if (hasSupabase()) {
+            $('health').textContent = `supabase · ${new Date().toLocaleTimeString()}`;
+          } else {
+            const h = await fetch(apiUrl('/api/health')).then(r => r.json());
+            $('health').textContent = h.ok ? `ok · ${new Date(h.ts).toLocaleTimeString()}` : 'not ok';
+          }
         } catch { $('health').textContent = 'health error'; }
 
+        // Tasks
         try {
-          const t = await fetch(apiUrl('/api/tasks')).then(r => r.json());
-          TASKS = (t.tasks || []);
+          if (hasSupabase()) {
+            const sb = getSupabaseClient();
+            const { data, error } = await sb.from('tasks').select('*').order('updated_at', { ascending: false }).limit(500);
+            if (error) throw error;
+            TASKS = (data || []).map((r) => ({
+              id: r.id,
+              title: r.title,
+              status: r.status,
+              parentId: r.parent_id,
+              detail: r.detail || '',
+              notes: r.notes || [],
+              artifacts: r.artifacts || [],
+              howToTest: r.how_to_test || '',
+              humanNeeded: !!r.human_needed,
+              humanNeededReason: r.human_needed_reason || '',
+              createdAt: r.created_at,
+              updatedAt: r.updated_at,
+            }));
+          } else {
+            const t = await fetch(apiUrl('/api/tasks')).then(r => r.json());
+            TASKS = (t.tasks || []);
+          }
+
           TASK_BY_ID = new Map(TASKS.map(x => [x.id, x]));
           $('taskcount').textContent = `${TASKS.length} total`;
 
@@ -234,30 +281,73 @@
           }
         } catch {}
 
-        try {
-          const a = await fetch(apiUrl('/api/activity')).then(r => r.json());
-          $('logpath').textContent = a.ok ? a.path : '';
-          $('activity').textContent = a.ok ? a.items.join('\n') : (a.error || 'no activity');
-        } catch {
-          $('activity').textContent = 'activity fetch error';
+        // Activity + logs (server backend only)
+        if (hasSupabase()) {
+          $('logpath').textContent = 'supabase mode';
+          $('activity').textContent = 'Activity/log tail require the droplet backend. (Next step: droplet publisher pushes summaries into Supabase events.)';
+          $('logs').textContent = 'log tail disabled in supabase mode';
+        } else {
+          try {
+            const a = await fetch(apiUrl('/api/activity')).then(r => r.json());
+            $('logpath').textContent = a.ok ? a.path : '';
+            $('activity').textContent = a.ok ? a.items.join('\n') : (a.error || 'no activity');
+          } catch {
+            $('activity').textContent = 'activity fetch error';
+          }
+
+          try {
+            const l = await fetch(apiUrl('/api/logs?lines=250')).then(r => r.json());
+            $('logs').textContent = l.ok ? l.lines : (l.error || 'no logs');
+          } catch {
+            $('logs').textContent = 'log fetch error';
+          }
         }
 
+        // Events
         try {
-          const l = await fetch(apiUrl('/api/logs?lines=250')).then(r => r.json());
-          $('logs').textContent = l.ok ? l.lines : (l.error || 'no logs');
-        } catch {
-          $('logs').textContent = 'log fetch error';
-        }
-
-        try {
-          const ev = await fetch(apiUrl('/api/events?limit=200')).then(r => r.json());
-          const root = $('events');
-          root.innerHTML = '';
-          (ev.events || []).slice().reverse().forEach(e => root.appendChild(eventEl(e)));
+          if (hasSupabase()) {
+            const sb = getSupabaseClient();
+            const { data, error } = await sb.from('events').select('*').order('ts', { ascending: false }).limit(200);
+            if (error) throw error;
+            const root = $('events');
+            root.innerHTML = '';
+            (data || []).forEach(e => root.appendChild(eventEl({ ts: e.ts, type: e.type, detail: e.detail })));
+          } else {
+            const ev = await fetch(apiUrl('/api/events?limit=200')).then(r => r.json());
+            const root = $('events');
+            root.innerHTML = '';
+            (ev.events || []).slice().reverse().forEach(e => root.appendChild(eventEl(e)));
+          }
         } catch {}
       }
 
       async function upsertTask(payload) {
+        // Supabase mode
+        const sb = getSupabaseClient();
+        if (sb) {
+          const now = new Date().toISOString();
+          const row = {
+            id: payload.id || undefined,
+            title: payload.title,
+            status: payload.status,
+            parent_id: payload.parentId ?? null,
+            detail: payload.detail ?? null,
+            notes: payload.notes ?? null,
+            artifacts: payload.artifacts ?? null,
+            how_to_test: payload.howToTest ?? null,
+            human_needed: typeof payload.humanNeeded === 'boolean' ? payload.humanNeeded : null,
+            human_needed_reason: payload.humanNeededReason ?? null,
+            updated_at: now,
+          };
+
+          // Upsert requires a unique constraint on id.
+          const { data, error } = await sb.from('tasks').upsert(row, { onConflict: 'id' }).select().maybeSingle();
+          if (error) throw error;
+          await sb.from('events').insert({ type: 'task.upsert', detail: { taskId: data?.id || payload.id || null } });
+          return { ok: true, task: data };
+        }
+
+        // Default (droplet backend)
         const r = await fetch(apiUrl('/api/tasks'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -359,11 +449,33 @@
 
       $('setApi').addEventListener('click', () => {
         const current = getApiBase();
-        const next = prompt('Backend URL (example: http://127.0.0.1:3999 or https://claw-api.yourdomain.com)', current || '');
+        const next = prompt('Backend URL (droplet API). Leave blank to disable.', current || '');
         if (next === null) return;
         const v = String(next).trim();
         if (!v) localStorage.removeItem('NIKACLAW_API_BASE_URL');
         else localStorage.setItem('NIKACLAW_API_BASE_URL', v);
+        refresh();
+      });
+
+      $('setSb').addEventListener('click', () => {
+        const curUrl = getSupabaseUrl();
+        const curKey = getSupabaseAnonKey();
+        const nextUrl = prompt('Supabase URL (https://xxxx.supabase.co). Leave blank to disable.', curUrl || '');
+        if (nextUrl === null) return;
+        const vUrl = String(nextUrl).trim();
+        if (!vUrl) {
+          localStorage.removeItem('NIKACLAW_SUPABASE_URL');
+          localStorage.removeItem('NIKACLAW_SUPABASE_ANON_KEY');
+          window.__nikaSupabase = null;
+          refresh();
+          return;
+        }
+        const nextKey = prompt('Supabase anon key (public).', curKey || '');
+        if (nextKey === null) return;
+        const vKey = String(nextKey).trim();
+        localStorage.setItem('NIKACLAW_SUPABASE_URL', vUrl);
+        localStorage.setItem('NIKACLAW_SUPABASE_ANON_KEY', vKey);
+        window.__nikaSupabase = null;
         refresh();
       });
 
